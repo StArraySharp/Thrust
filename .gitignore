@@ -1,0 +1,15 @@
+# 构建产物 / Build output
+bin/
+obj/
+publish/
+
+# IDE / 编辑器
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# 包 / Packages
+*.nupkg
+*.snupkg
