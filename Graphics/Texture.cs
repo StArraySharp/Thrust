@@ -70,6 +70,23 @@ public sealed class Texture : IDisposable
     /// <summary>是否已释放 / Whether the texture has been disposed.</summary>
     public bool IsDisposed { get; private set; }
 
+    /// <summary>
+    /// 从文件加载（PNG / JPEG 等，格式由内容识别）。
+    /// Load from a file; the format is detected from the content.
+    /// </summary>
+    public static Texture Load(string path, string? name = null)
+    {
+        ImageDecoder.RgbaImage image = ImageDecoder.DecodeFile(path);
+        return new Texture(image.Width, image.Height, image.Pixels) { Name = name ?? Path.GetFileName(path) };
+    }
+
+    /// <summary>从内存数据加载 / Load from a byte buffer.</summary>
+    public static Texture LoadFromMemory(ReadOnlySpan<byte> data, string? name = null)
+    {
+        ImageDecoder.RgbaImage image = ImageDecoder.Decode(data);
+        return new Texture(image.Width, image.Height, image.Pixels) { Name = name ?? "Texture" };
+    }
+
     /// <summary>整体替换像素 / Replace all pixels.</summary>
     public void SetPixels(byte[] rgba, int width, int height)
     {

@@ -32,6 +32,7 @@ public enum VertexAttribute
     Custom1,
     Custom2,
     Custom3,
+    Custom4,
 }
 
 /// <summary>
@@ -161,7 +162,7 @@ public readonly struct VertexElement
 public sealed class VertexDeclaration
 {
     /// <summary>枚举值的数量，用于按枚举值直接索引 / Number of enum values, used for direct indexing.</summary>
-    private const int AttributeCount = (int)VertexAttribute.Custom3 + 1;
+    private const int AttributeCount = (int)VertexAttribute.Custom4 + 1;
 
     private readonly VertexElement[] _elements;
     private readonly Dictionary<VertexAttribute, int> _indexByAttribute;
