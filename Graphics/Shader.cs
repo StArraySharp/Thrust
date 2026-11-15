@@ -6,6 +6,12 @@ namespace Thrust.Graphics;
 /// </summary>
 public sealed class Shader : IDisposable
 {
+    /// <summary>
+    /// Optional source resolver. When set, renderers ask it for shader text before touching the disk,
+    /// which lets a self-contained executable serve shaders from its own embedded resources.
+    /// </summary>
+    public static Func<string, string?>? SourceResolver { get; set; }
+
     public Shader(string vertexSource, string fragmentSource, string? name = null)
     {
         VertexSource = vertexSource;
@@ -49,6 +55,12 @@ public sealed class Shader : IDisposable
     /// <summary>读取一个着色器文件 / Read one shader file.</summary>
     public static string ReadSource(string directory, string name)
     {
+        // A resolver lets a single-file bundle supply the source without a loose file on disk.
+        if (SourceResolver?.Invoke(name) is { } resolved)
+        {
+            return resolved;
+        }
+
         string path = Path.Combine(directory, name);
 
         if (!File.Exists(path))
