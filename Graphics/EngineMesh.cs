@@ -226,6 +226,43 @@ public sealed unsafe class Mesh : ICullable, IDisposable
         _version++;
     }
 
+    /// <summary>Appends a block of indices relative to the supplied base vertex.</summary>
+    public void AppendIndices(ReadOnlySpan<int> indices, int baseVertex)
+    {
+        ThrowIfDisposed();
+        ArgumentOutOfRangeException.ThrowIfNegative(baseVertex);
+        if (indices.IsEmpty)
+        {
+            return;
+        }
+
+        int end = checked(IndexCount + indices.Length);
+        EnsureIndexCapacity(end);
+        if (IndexFormat == IndexFormat.UInt16)
+        {
+            Span<ushort> target = new((ushort*)_indexData + IndexCount, indices.Length);
+            for (int i = 0; i < indices.Length; i++)
+            {
+                uint index = checked((uint)((long)baseVertex + indices[i]));
+                ValidateIndex(index);
+                target[i] = (ushort)index;
+            }
+        }
+        else
+        {
+            Span<uint> target = new((uint*)_indexData + IndexCount, indices.Length);
+            for (int i = 0; i < indices.Length; i++)
+            {
+                uint index = checked((uint)((long)baseVertex + indices[i]));
+                ValidateIndex(index);
+                target[i] = index;
+            }
+        }
+
+        IndexCount = end;
+        _version++;
+    }
+
     /// <summary>追加一个三角形 / Append one triangle.</summary>
     public void AppendTriangle(uint a, uint b, uint c)
     {
