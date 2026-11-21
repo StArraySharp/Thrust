@@ -17,7 +17,7 @@ public sealed unsafe class InstancedRenderer : IDisposable
     public const int InstanceStrideBytes = (16 + 4) * sizeof(float);
 
     private readonly int _vao;
-    private readonly int _instanceBuffer;
+    private readonly GlStreamBuffer _instanceBuffer;
     private readonly int _shader;
     private readonly int _indexType;
     private readonly int _locationViewProjection;
@@ -26,8 +26,8 @@ public sealed unsafe class InstancedRenderer : IDisposable
     // Instance data lives in unmanaged memory to avoid GC pressure
     private nint _instanceData;
     private int _instanceCapacity;
-    private int _gpuCapacityBytes;
     private int _uploadedInstanceCount = -1;
+    private int _residentInstanceCount;
     private bool _disposed;
 
     /// <summary>
@@ -55,13 +55,22 @@ public sealed unsafe class InstancedRenderer : IDisposable
         MeshHandle = meshHandle;
         _shader = CreateShader(shaderDirectory);
         _locationViewProjection = GL.GetUniformLocation(_shader, "uViewProjection");
-        _vao = meshHandle.Vao;
-        _instanceBuffer = GL.GenBuffer();
+        // Instance attributes belong to this renderer, not the shared mesh VAO.
+        _vao = GL.GenVertexArray();
+        _instanceBuffer = new GlStreamBuffer();
 
         // 网格属性占用 location 0..4，实例数据从 5 开始
         // Mesh attributes occupy locations 0..4, so instance data starts at 5
         GL.BindVertexArray(_vao);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _instanceBuffer);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, meshHandle.Vbo);
+        GL.BindBuffer(BufferTarget.ElementArrayBuffer, meshHandle.Ebo);
+        foreach (var attribute in VertexLayoutExport.ForOpenGL(mesh.Declaration))
+        {
+            GL.EnableVertexAttribArray(attribute.Location);
+            GL.VertexAttribPointer(attribute.Location, attribute.Components,
+                (VertexAttribPointerType)attribute.OpenGlType, attribute.Normalized, attribute.Stride, attribute.Offset);
+        }
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _instanceBuffer.Handle);
 
         for (int i = 0; i < 4; i++)
         {
@@ -102,7 +111,8 @@ public sealed unsafe class InstancedRenderer : IDisposable
     public bool UploadedThisFrame { get; private set; }
 
     /// <summary>GPU 上的实例数据是否仍然有效 / Whether the GPU buffer still holds valid instance data.</summary>
-    public bool HasUploadedData => _uploadedInstanceCount == InstanceCount && InstanceCount > 0;
+    public bool HasUploadedData => _uploadedInstanceCount == InstanceCount && InstanceCount > 0
+        && _residentInstanceCount >= InstanceCount;
 
     /// <summary>
     /// 准备实例数据 / Prepare instance data.
@@ -166,22 +176,13 @@ public sealed unsafe class InstancedRenderer : IDisposable
             return;
         }
 
-        int bytes = InstanceCount * InstanceStrideBytes;
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _instanceBuffer);
-
-        if (bytes > _gpuCapacityBytes)
-        {
-            GL.BufferData(BufferTarget.ArrayBuffer, (nint)bytes, 0, BufferUsageHint.StreamDraw);
-            _gpuCapacityBytes = bytes;
-            _uploadedInstanceCount = -1;
-        }
-
         // 只在数据变化时上传 / Upload only when the data changed
-        UploadedThisFrame = _uploadedInstanceCount != InstanceCount;
+        UploadedThisFrame = _uploadedInstanceCount != InstanceCount || _residentInstanceCount < InstanceCount;
         if (UploadedThisFrame)
         {
-            GL.BufferSubData(BufferTarget.ArrayBuffer, 0, (nint)bytes, _instanceData);
+            _instanceBuffer.Upload(_instanceData, checked(InstanceCount * InstanceStrideBytes));
             _uploadedInstanceCount = InstanceCount;
+            _residentInstanceCount = InstanceCount;
         }
 
         GL.UseProgram(_shader);
@@ -301,9 +302,9 @@ public sealed unsafe class InstancedRenderer : IDisposable
             return;
         }
 
-        // 实例缓冲属于本渲染器；VAO/VBO/EBO 仍归上传器所有
-        // The instance buffer belongs to this renderer; the VAO/VBO/EBO stay with the uploader
-        GL.DeleteBuffer(_instanceBuffer);
+        // Own the instance buffer and VAO; mesh buffers remain with the uploader.
+        _instanceBuffer.Dispose();
+        GL.DeleteVertexArray(_vao);
         GL.DeleteProgram(_shader);
 
         if (_instanceData != 0)
@@ -313,7 +314,7 @@ public sealed unsafe class InstancedRenderer : IDisposable
         }
 
         _instanceCapacity = 0;
-        _gpuCapacityBytes = 0;
+        _residentInstanceCount = 0;
         _disposed = true;
     }
 }

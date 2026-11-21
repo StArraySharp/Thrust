@@ -21,6 +21,7 @@ no assets — the window, input, shaders and textures belong to the host applica
 - **Scene graph** — `SceneNode` hierarchy plus `RenderQueue` (cull, group opaque by material, sort
   transparent back-to-front)
 - **Textures & images** — RGBA32 textures with bilinear sampling and atlas packing; PNG / JPEG decoding
+- **Text rasterization** — CPU-only RGBA32 text, system font fallback, multiline alignment and measurement
 - **Streaming audio** — OpenAL device management, WAV (built-in) and OGG (NVorbis) decoding, buffer-queue
   streaming playback
 
@@ -38,6 +39,7 @@ no assets — the window, input, shaders and textures belong to the host applica
 | [NVorbis](https://github.com/NVorbis/NVorbis) | 1.0.0-rc.2 | OGG Vorbis decoding | MIT |
 | [OpenAL.Soft](https://github.com/kcat/openal-soft) | 1.23.1 | Native OpenAL runtime | LGPL-2.1-or-later |
 | [SixLabors.ImageSharp](https://github.com/SixLabors/ImageSharp) | 4.1.3 | Image decoding and scaling | Six Labors Split License 1.0 |
+| [SixLabors.ImageSharp.Drawing](https://github.com/SixLabors/ImageSharp.Drawing) | 3.1.3 | Text drawing (includes SixLabors.Fonts) | Six Labors Split License 1.0 |
 
 ## Project Structure
 
@@ -46,7 +48,7 @@ Thrust/
 ├─ Audio/      AudioEngine, AudioClip, AudioDecoder (WAV / OGG)
 ├─ Geometry/   Aabb, BoundingSphere, Plane, Frustum, Ray, Transform
 ├─ Graphics/   Mesh, MeshBuilder, GlMeshUploader, InstancedRenderer, CircleRenderer,
-│              Shader, Material, Light, Texture, ImageDecoder, VertexLayout
+│              Shader, Material, Light, Texture, ImageDecoder, TextRasterizer, VertexLayout
 └─ Scene/      Camera, Camera2D, OrbitCameraController, FlyCameraController,
                SceneNode, RenderQueue
 ```
@@ -190,6 +192,27 @@ byte[] atlas = ImageDecoder.BuildAtlas(sources, columns: 2, rows: 2, cellSize: 5
 ```
 
 GPU texture handles are owned by the caller — release them with `GL.DeleteTexture`.
+
+### Text rasterization
+
+```csharp
+var options = new TextRasterizationOptions
+{
+    FontFamily = "Arial", FontSize = 48, Padding = 4,
+    FallbackFamilies = ["Microsoft YaHei", "Noto Sans CJK SC"],
+    Alignment = TextAlignment.Center, LineSpacing = 1f,
+};
+var size = TextRasterizer.Measure("Hello\n世界", options); // no pixel allocation
+ImageDecoder.RgbaImage text = TextRasterizer.Rasterize("Hello\n世界", options);
+// Flip vertically before uploading to OpenGL, as with decoded images.
+ImageDecoder.FlipVertically(text.Pixels, text.Width, text.Height);
+```
+
+Text uses pixel units and explicit line breaks; it does not wrap automatically. `MaxWidth` / `MaxHeight`
+clip the canvas without scaling glyphs. Empty text returns a transparent 1×1 image. Install fonts on
+the host system (including on Linux/macOS); missing faces use the configured fallbacks, then installed
+system fonts. Output can differ across systems with different fonts. Resolved faces are cached with a
+fixed entry limit; text pixels remain owned by each call. Drawing writes directly into the RGBA array.
 
 ### Audio
 

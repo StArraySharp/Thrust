@@ -18,6 +18,7 @@ Thrust 只负责引擎那一层：网格与几何构建、实例化批绘、GPU 
 - **相机与剔除** — 透视 / 正交相机、视锥剔除、拾取射线、2D 相机、轨道与飞行控制器
 - **场景图** — `SceneNode` 层级与 `RenderQueue`（剔除后按材质聚合，半透明由远到近排序）
 - **纹理与图片** — RGBA32 纹理、双线性采样、图集拼接；PNG / JPEG 解码
+- **文字栅格化** — 纯 CPU 的 RGBA32 文字输出、系统字体回退、多行对齐与测量
 - **流式音频** — OpenAL 设备管理、WAV（内置解析）与 OGG（NVorbis）解码、按缓冲队列流式播放
 
 ## 系统要求
@@ -34,6 +35,7 @@ Thrust 只负责引擎那一层：网格与几何构建、实例化批绘、GPU 
 | [NVorbis](https://github.com/NVorbis/NVorbis) | 1.0.0-rc.2 | OGG Vorbis 解码 | MIT |
 | [OpenAL.Soft](https://github.com/kcat/openal-soft) | 1.23.1 | 原生 OpenAL 运行时 | LGPL-2.1-or-later |
 | [SixLabors.ImageSharp](https://github.com/SixLabors/ImageSharp) | 4.1.3 | 图片解码与缩放 | Six Labors Split License 1.0 |
+| [SixLabors.ImageSharp.Drawing](https://github.com/SixLabors/ImageSharp.Drawing) | 3.1.3 | 文字绘制（含 SixLabors.Fonts） | Six Labors Split License 1.0 |
 
 ## 项目结构
 
@@ -42,7 +44,7 @@ Thrust/
 ├─ Audio/      AudioEngine、AudioClip、AudioDecoder（WAV / OGG）
 ├─ Geometry/   Aabb、BoundingSphere、Plane、Frustum、Ray、Transform
 ├─ Graphics/   Mesh、MeshBuilder、GlMeshUploader、InstancedRenderer、CircleRenderer、
-│              Shader、Material、Light、Texture、ImageDecoder、VertexLayout
+│              Shader、Material、Light、Texture、ImageDecoder、TextRasterizer、VertexLayout
 └─ Scene/      Camera、Camera2D、OrbitCameraController、FlyCameraController、
                SceneNode、RenderQueue
 ```
@@ -186,6 +188,26 @@ byte[] atlas = ImageDecoder.BuildAtlas(sources, columns: 2, rows: 2, cellSize: 5
 ```
 
 GPU 纹理句柄由调用方持有，请用 `GL.DeleteTexture` 释放。
+
+### 文字栅格化
+
+```csharp
+var options = new TextRasterizationOptions
+{
+    FontFamily = "Arial", FontSize = 48, Padding = 4,
+    FallbackFamilies = ["Microsoft YaHei", "Noto Sans CJK SC"],
+    Alignment = TextAlignment.Center, LineSpacing = 1f,
+};
+var size = TextRasterizer.Measure("Hello\n世界", options); // 不分配像素缓冲
+ImageDecoder.RgbaImage text = TextRasterizer.Rasterize("Hello\n世界", options);
+// 与图片解码结果相同，上传 OpenGL 前先垂直翻转。
+ImageDecoder.FlipVertically(text.Pixels, text.Width, text.Height);
+```
+
+字号按像素计算，保留显式换行，不自动折行；`MaxWidth` / `MaxHeight` 限制画布并裁切溢出，
+不会缩放字形。空文本返回透明的 1×1 图片。宿主系统（包括 Linux/macOS）需要安装字体；
+缺失字体依次使用指定回退字体和系统字体，因此不同系统的字体差异会影响输出。字体解析结果
+有数量上限的缓存，每次调用独立持有像素，绘制直接写入返回的 RGBA 数组。
 
 ### 音频
 
