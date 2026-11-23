@@ -225,6 +225,8 @@ music.Seek(12.0);
 AudioEngine.Shutdown();
 ```
 
+WAV 解码支持整数 PCM 和单声道或双声道的 32 位 IEEE 浮点 PCM，也支持其 `WAVE_FORMAT_EXTENSIBLE` 变体。浮点采样转换为 OpenAL 使用的 16 位有符号 PCM，保留原采样率。
+
 `AudioDecoder.Decode` 按路径缓存解码结果，`AudioDecoder.ClearCache()` 可清理缓存；
 合成的音轨可包装成 `DecodedAudio`，通过 `LoadDecoded` 播放。
 

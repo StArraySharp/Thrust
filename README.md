@@ -230,6 +230,8 @@ music.Seek(12.0);
 AudioEngine.Shutdown();
 ```
 
+The WAV decoder supports integer PCM and mono/stereo 32-bit IEEE float, including their `WAVE_FORMAT_EXTENSIBLE` variants. Float samples are converted to signed 16-bit PCM at the original sample rate for OpenAL.
+
 `AudioDecoder.Decode` caches per path; `AudioDecoder.ClearCache()` drops the cache. Synthesised tracks can be
 wrapped in `DecodedAudio` and played through `LoadDecoded`.
 

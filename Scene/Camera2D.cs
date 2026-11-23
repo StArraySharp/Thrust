@@ -99,8 +99,7 @@ public sealed class Camera2D
     /// <summary>平移（屏幕像素增量） / Pan by a screen-space pixel delta.</summary>
     public void PanPixels(Vector2 screenDelta)
     {
-        float worldPerPixel = 1f / Zoom;
-        Position -= new Vector2(screenDelta.X, -screenDelta.Y) * worldPerPixel;
+        Position -= ScreenDeltaToWorld(screenDelta);
         MarkDirty();
     }
 
@@ -125,9 +124,7 @@ public sealed class Camera2D
         Zoom = next;
 
         // 让锚点保持在原来的屏幕位置 / Keep the anchor under the same screen point
-        Vector2 anchorScreen = WorldToScreen(anchorWorld);
-        Vector2 correction = screenPoint - anchorScreen;
-        Position -= new Vector2(correction.X, -correction.Y) / Zoom;
+        Position += anchorWorld - ScreenToWorld(screenPoint);
 
         MarkDirty();
     }
@@ -135,19 +132,19 @@ public sealed class Camera2D
     /// <summary>屏幕坐标（像素，左上原点）转世界坐标 / Screen pixels (top-left origin) to world.</summary>
     public Vector2 ScreenToWorld(Vector2 screenPoint)
     {
-        Vector2 centered = new(
-            screenPoint.X - ViewportWidth * 0.5f,
-            ViewportHeight * 0.5f - screenPoint.Y);
+        return Position + ScreenDeltaToWorld(screenPoint - new Vector2(ViewportWidth, ViewportHeight) * 0.5f);
+    }
 
-        if (MathF.Abs(Rotation) > 1e-4f)
+    /// <summary>Convert a screen-space pixel delta into a world-space delta.</summary>
+    public Vector2 ScreenDeltaToWorld(Vector2 delta)
+    {
+        Vector2 centered = new(delta.X, -delta.Y);
+        if (Rotation != 0f)
         {
-            float radians = Rotation * MathF.PI / 180f;
-            float cos = MathF.Cos(radians);
-            float sin = MathF.Sin(radians);
-            centered = new Vector2(centered.X * cos + centered.Y * sin, -centered.X * sin + centered.Y * cos);
+            (float sin, float cos) = MathF.SinCos(MathHelper.DegreesToRadians(Rotation));
+            centered = new Vector2(centered.X * cos - centered.Y * sin, centered.X * sin + centered.Y * cos);
         }
-
-        return Position + centered / Zoom;
+        return centered / Zoom;
     }
 
     /// <summary>世界坐标转屏幕坐标（像素，左上原点） / World to screen pixels (top-left origin).</summary>
@@ -155,12 +152,10 @@ public sealed class Camera2D
     {
         Vector2 local = (worldPoint - Position) * Zoom;
 
-        if (MathF.Abs(Rotation) > 1e-4f)
+        if (Rotation != 0f)
         {
-            float radians = Rotation * MathF.PI / 180f;
-            float cos = MathF.Cos(radians);
-            float sin = MathF.Sin(radians);
-            local = new Vector2(local.X * cos - local.Y * sin, local.X * sin + local.Y * cos);
+            (float sin, float cos) = MathF.SinCos(MathHelper.DegreesToRadians(Rotation));
+            local = new Vector2(local.X * cos + local.Y * sin, -local.X * sin + local.Y * cos);
         }
 
         return new Vector2(
