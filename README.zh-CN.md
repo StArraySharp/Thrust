@@ -19,7 +19,7 @@ Thrust 只负责引擎那一层：网格与几何构建、实例化批绘、GPU 
 - **场景图** — `SceneNode` 层级与 `RenderQueue`（剔除后按材质聚合，半透明由远到近排序）
 - **纹理与图片** — RGBA32 纹理、双线性采样、图集拼接；PNG / JPEG 解码
 - **文字栅格化** — 纯 CPU 的 RGBA32 文字输出、系统字体回退、多行对齐与测量
-- **流式音频** — OpenAL 设备管理、WAV（内置解析）与 OGG（NVorbis）解码、按缓冲队列流式播放
+- **流式音频** — OpenAL 设备管理、WAV、Ogg Vorbis、MP3 和 AIFF 解码、按缓冲队列播放
 
 ## 系统要求
 
@@ -33,6 +33,7 @@ Thrust 只负责引擎那一层：网格与几何构建、实例化批绘、GPU 
 | --- | --- | --- | --- |
 | [OpenTK](https://github.com/opentk/opentk) | 4.9.4 | OpenGL / OpenAL 绑定与数学类型 | MIT |
 | [NVorbis](https://github.com/NVorbis/NVorbis) | 1.0.0-rc.2 | OGG Vorbis 解码 | MIT |
+| [MP3Sharp](https://www.nuget.org/packages/MP3Sharp/1.0.5) | 1.0.5 | MP3 解码 | LGPL-3.0 |
 | [OpenAL.Soft](https://github.com/kcat/openal-soft) | 1.23.1 | 原生 OpenAL 运行时 | LGPL-2.1-or-later |
 | [SixLabors.ImageSharp](https://github.com/SixLabors/ImageSharp) | 4.1.3 | 图片解码与缩放 | Six Labors Split License 1.0 |
 | [SixLabors.ImageSharp.Drawing](https://github.com/SixLabors/ImageSharp.Drawing) | 3.1.3 | 文字绘制（含 SixLabors.Fonts） | Six Labors Split License 1.0 |
@@ -41,7 +42,7 @@ Thrust 只负责引擎那一层：网格与几何构建、实例化批绘、GPU 
 
 ```
 Thrust/
-├─ Audio/      AudioEngine、AudioClip、AudioDecoder（WAV / OGG）
+├─ Audio/      AudioEngine、AudioClip、AudioDecoder（WAV / OGG / MP3 / AIFF）
 ├─ Geometry/   Aabb、BoundingSphere、Plane、Frustum、Ray、Transform
 ├─ Graphics/   Mesh、MeshBuilder、GlMeshUploader、InstancedRenderer、CircleRenderer、
 │              Shader、Material、Light、Texture、ImageDecoder、TextRasterizer、VertexLayout
@@ -217,7 +218,7 @@ using Thrust.Audio;
 AudioEngine.Initialize();                  // 进程内一次即可
 
 using AudioClip music = new() { Volume = 0.8f };
-music.Load("song.ogg");                    // .wav / .ogg
+music.Load("song.ogg");                    // .wav / .ogg / .mp3 / .aif / .aiff / .aifc
 music.Play();
 music.Update();                            // 每帧调用
 music.Seek(12.0);
@@ -226,6 +227,8 @@ AudioEngine.Shutdown();
 ```
 
 WAV 解码支持整数 PCM 和单声道或双声道的 32 位 IEEE 浮点 PCM，也支持其 `WAVE_FORMAT_EXTENSIBLE` 变体。浮点采样转换为 OpenAL 使用的 16 位有符号 PCM，保留原采样率。
+
+MP3 和 AIFF 保留原采样率及单声道或双声道布局。MP3 带有效的 Xing/Info 编码器标记时会裁掉编码延迟与尾部填充。AIFF 支持有符号整数 PCM，AIFF-C 支持大端或小端整数 PCM 和 IEEE 浮点 PCM。
 
 `AudioDecoder.Decode` 按路径缓存解码结果，`AudioDecoder.ClearCache()` 可清理缓存；
 合成的音轨可包装成 `DecodedAudio`，通过 `LoadDecoded` 播放。

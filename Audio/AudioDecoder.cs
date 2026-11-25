@@ -33,15 +33,14 @@ public sealed class DecodedAudio
 }
 
 /// <summary>
-/// 跨平台音频解码器：WAV（内置解析）+ OGG Vorbis（NVorbis，纯托管）
-/// Cross-platform audio decoder: WAV (built-in parser) plus OGG Vorbis through the pure managed NVorbis.
+/// Cross-platform PCM decoder for WAV, Ogg Vorbis, MP3, and AIFF.
 /// </summary>
-public static class AudioDecoder
+public static partial class AudioDecoder
 {
     private const int TargetSampleRate = 44100;
 
     /// <summary>支持的文件扩展名 / Supported file extensions.</summary>
-    public static readonly string[] SupportedExtensions = [".wav", ".ogg"];
+    public static readonly string[] SupportedExtensions = [".wav", ".ogg", ".mp3", ".aif", ".aiff", ".aifc"];
 
     // 按文件路径缓存解码结果，避免重复解码同一文件
     // Cache decoded audio per path so the same file is not decoded twice
@@ -145,6 +144,8 @@ public static class AudioDecoder
     {
         try
         {
+            if (fileExtension.Equals(".mp3", StringComparison.OrdinalIgnoreCase))
+                return DecodeMp3(File.OpenRead(path));
             byte[] bytes = File.ReadAllBytes(path);
             return DecodeUncached(bytes, fileExtension);
         }
@@ -163,6 +164,8 @@ public static class AudioDecoder
             {
                 ".ogg" => DecodeOgg(bytes),
                 ".wav" => DecodeWav(bytes),
+                ".mp3" => DecodeMp3(new MemoryStream(bytes, writable: false)),
+                ".aif" or ".aiff" or ".aifc" => DecodeAiff(bytes),
                 _ => null,
             };
         }
@@ -357,9 +360,7 @@ public static class AudioDecoder
             for (int i = 0; i < sampleCount; i++)
             {
                 float sample = BinaryPrimitives.ReadSingleLittleEndian(raw[(i * sizeof(float))..]);
-                short value = float.IsNaN(sample) ? (short)0 : (short)Math.Clamp(
-                    MathF.Round(Math.Clamp(sample, -1f, 1f) * 32768f), short.MinValue, short.MaxValue);
-                BinaryPrimitives.WriteInt16LittleEndian(pcm16.AsSpan(i * sizeof(short)), value);
+                BinaryPrimitives.WriteInt16LittleEndian(pcm16.AsSpan(i * sizeof(short)), FloatToPcm16(sample));
             }
         }
         else if (bitsPerSample == 16)
@@ -413,4 +414,7 @@ public static class AudioDecoder
             SampleRate = sampleRate,
         };
     }
+
+    private static short FloatToPcm16(double value) => double.IsNaN(value) ? (short)0 : (short)Math.Clamp(
+        Math.Round(Math.Clamp(value, -1d, 1d) * 32768d), short.MinValue, short.MaxValue);
 }

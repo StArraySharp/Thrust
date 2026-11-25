@@ -17,6 +17,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="MP3Sharp" Version="1.0.5" />
     <PackageReference Include="NVorbis" Version="1.0.0-rc.2" />
     <!--
       The native asset list of this package carries both Debug and Release copies of OpenAL32,

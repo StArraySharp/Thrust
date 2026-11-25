@@ -22,8 +22,7 @@ no assets — the window, input, shaders and textures belong to the host applica
   transparent back-to-front)
 - **Textures & images** — RGBA32 textures with bilinear sampling and atlas packing; PNG / JPEG decoding
 - **Text rasterization** — CPU-only RGBA32 text, system font fallback, multiline alignment and measurement
-- **Streaming audio** — OpenAL device management, WAV (built-in) and OGG (NVorbis) decoding, buffer-queue
-  streaming playback
+- **Streaming audio** — OpenAL device management, WAV, Ogg Vorbis, MP3, and AIFF decoding, and buffer-queue playback
 
 ## Requirements
 
@@ -37,6 +36,7 @@ no assets — the window, input, shaders and textures belong to the host applica
 | --- | --- | --- | --- |
 | [OpenTK](https://github.com/opentk/opentk) | 4.9.4 | OpenGL / OpenAL bindings, math types | MIT |
 | [NVorbis](https://github.com/NVorbis/NVorbis) | 1.0.0-rc.2 | OGG Vorbis decoding | MIT |
+| [MP3Sharp](https://www.nuget.org/packages/MP3Sharp/1.0.5) | 1.0.5 | MP3 decoding | LGPL-3.0 |
 | [OpenAL.Soft](https://github.com/kcat/openal-soft) | 1.23.1 | Native OpenAL runtime | LGPL-2.1-or-later |
 | [SixLabors.ImageSharp](https://github.com/SixLabors/ImageSharp) | 4.1.3 | Image decoding and scaling | Six Labors Split License 1.0 |
 | [SixLabors.ImageSharp.Drawing](https://github.com/SixLabors/ImageSharp.Drawing) | 3.1.3 | Text drawing (includes SixLabors.Fonts) | Six Labors Split License 1.0 |
@@ -45,7 +45,7 @@ no assets — the window, input, shaders and textures belong to the host applica
 
 ```
 Thrust/
-├─ Audio/      AudioEngine, AudioClip, AudioDecoder (WAV / OGG)
+├─ Audio/      AudioEngine, AudioClip, AudioDecoder (WAV / OGG / MP3 / AIFF)
 ├─ Geometry/   Aabb, BoundingSphere, Plane, Frustum, Ray, Transform
 ├─ Graphics/   Mesh, MeshBuilder, GlMeshUploader, InstancedRenderer, CircleRenderer,
 │              Shader, Material, Light, Texture, ImageDecoder, TextRasterizer, VertexLayout
@@ -222,7 +222,7 @@ using Thrust.Audio;
 AudioEngine.Initialize();                  // once per process
 
 using AudioClip music = new() { Volume = 0.8f };
-music.Load("song.ogg");                    // .wav / .ogg
+music.Load("song.ogg");                    // .wav / .ogg / .mp3 / .aif / .aiff / .aifc
 music.Play();
 music.Update();                            // call every frame
 music.Seek(12.0);
@@ -231,6 +231,8 @@ AudioEngine.Shutdown();
 ```
 
 The WAV decoder supports integer PCM and mono/stereo 32-bit IEEE float, including their `WAVE_FORMAT_EXTENSIBLE` variants. Float samples are converted to signed 16-bit PCM at the original sample rate for OpenAL.
+
+MP3 and AIFF retain the source sample rate and mono or stereo channel layout. The MP3 decoder trims encoder delay and trailing padding when valid Xing/Info and LAME metadata is available. AIFF supports signed integer PCM, and AIFF-C supports PCM in either byte order and IEEE float PCM.
 
 `AudioDecoder.Decode` caches per path; `AudioDecoder.ClearCache()` drops the cache. Synthesised tracks can be
 wrapped in `DecodedAudio` and played through `LoadDecoded`.
