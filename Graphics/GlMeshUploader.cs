@@ -42,12 +42,13 @@ public sealed unsafe class GlMeshUploader : IMeshGpuUploader, IDisposable
         }
 
         // 版本未变时跳过 / Skip when the mesh has not changed
-        if (handle.Version == mesh.Version && handle.VertexCount == mesh.VertexCount && handle.IndexCount == mesh.IndexCount)
+        if (handle.IsValid && handle.Version == mesh.Version && handle.VertexCount == mesh.VertexCount && handle.IndexCount == mesh.IndexCount)
         {
             return;
         }
 
-        if (handle.Vao == 0)
+        bool configureLayout = !handle.IsValid;
+        if (configureLayout)
         {
             handle.Vao = GL.GenVertexArray();
             handle.Vbo = GL.GenBuffer();
@@ -65,30 +66,34 @@ public sealed unsafe class GlMeshUploader : IMeshGpuUploader, IDisposable
             BufferUsageHint.StaticDraw);
 
         // 索引缓冲 / Index buffer
-        GL.BindBuffer(BufferTarget.ElementArrayBuffer, handle.Ebo);
+        if (configureLayout)
+            GL.BindBuffer(BufferTarget.ElementArrayBuffer, handle.Ebo);
         GL.BufferData(
             BufferTarget.ElementArrayBuffer,
             (nint)(mesh.IndexBytes),
             (nint)mesh.IndexPointer,
             BufferUsageHint.StaticDraw);
 
-        // 顶点布局 / Vertex layout
-        GlVertexAttribute[] attributes = VertexLayoutExport.ForOpenGL(mesh.Declaration);
-        foreach (GlVertexAttribute attribute in attributes)
+        // The declaration and buffer names are fixed for the lifetime of the VAO.
+        if (configureLayout)
         {
-            GL.EnableVertexAttribArray(attribute.Location);
-            GL.VertexAttribPointer(
-                attribute.Location,
-                attribute.Components,
-                (VertexAttribPointerType)attribute.OpenGlType,
-                attribute.Normalized,
-                attribute.Stride,
-                attribute.Offset);
+            GlVertexAttribute[] attributes = VertexLayoutExport.ForOpenGL(mesh.Declaration);
+            foreach (GlVertexAttribute attribute in attributes)
+            {
+                GL.EnableVertexAttribArray(attribute.Location);
+                GL.VertexAttribPointer(
+                    attribute.Location,
+                    attribute.Components,
+                    (VertexAttribPointerType)attribute.OpenGlType,
+                    attribute.Normalized,
+                    attribute.Stride,
+                    attribute.Offset);
+            }
+            handle.EnabledAttributes = attributes.Length;
         }
 
         GL.BindVertexArray(0);
         GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
-        GL.BindBuffer(BufferTarget.ElementArrayBuffer, 0);
 
         handle.Version = mesh.Version;
         handle.VertexCount = mesh.VertexCount;
@@ -96,14 +101,6 @@ public sealed unsafe class GlMeshUploader : IMeshGpuUploader, IDisposable
         handle.VertexBytes = mesh.VertexBytes;
         handle.IndexBytes = mesh.IndexBytes;
         handle.IndexFormat = mesh.IndexFormat;
-
-        // 关闭本次上传启用的属性槽 / Disable slots no longer used by this mesh
-        for (int i = attributes.Length; i < handle.EnabledAttributes; i++)
-        {
-            GL.DisableVertexAttribArray(i);
-        }
-
-        handle.EnabledAttributes = attributes.Length;
     }
 
     /// <summary>取已上传的句柄 / Get the uploaded handle.</summary>
