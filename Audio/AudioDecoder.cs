@@ -1,6 +1,5 @@
 using NVorbis;
 using OpenTK.Audio.OpenAL;
-using System.Buffers.Binary;
 
 namespace Thrust.Audio;
 
@@ -21,13 +20,45 @@ public sealed class DecodedAudio
     /// </remarks>
     public const int TargetSampleRate = 48000;
 
-    public byte[] Pcm = [];
+    private byte[] _pcm = [];
+    private Func<AudioFrameReader>? _open;
+    private readonly long _frames;
+
+    public DecodedAudio() { }
+
+    internal DecodedAudio(int channels, int sampleRate, long frames, Func<AudioFrameReader> open)
+    {
+        Channels = channels;
+        SampleRate = sampleRate;
+        _frames = frames;
+        _open = open;
+    }
+
+    /// <summary>Obtains whole-track PCM for callers that explicitly require it.</summary>
+    public byte[] Pcm
+    {
+        get => _open is null ? _pcm : ReadPcm();
+        set
+        {
+            _pcm = value;
+            _open = null;
+        }
+    }
+
+    public bool IsStreamed => _open is not null;
+    public long FrameCount => _open is not null ? _frames : Channels > 0 ? _pcm.Length / (Channels * sizeof(short)) : 0;
+    public AudioFrameReader OpenReader() => _open?.Invoke() ?? new AudioFrameReader.MemoryReader(_pcm, Channels);
+
+    public byte[] ReadPcm(CancellationToken cancellation = default)
+    {
+        if (_open is null) return _pcm;
+        using var reader = OpenReader();
+        return AudioDecoder.ReadAll(reader, Channels, SampleRate, FrameCount, cancellation).Pcm;
+    }
     public int Channels = 2;
     public int SampleRate = TargetSampleRate;
 
-    public double Duration => SampleRate > 0 && Channels > 0
-        ? Pcm.Length / (double)(SampleRate * Channels * sizeof(short))
-        : 0.0;
+    public double Duration => SampleRate > 0 ? FrameCount / (double)SampleRate : 0.0;
 
     public ALFormat Format => Channels == 1 ? ALFormat.Mono16 : ALFormat.Stereo16;
 }
@@ -37,7 +68,7 @@ public sealed class DecodedAudio
 /// </summary>
 public static partial class AudioDecoder
 {
-    private const int TargetSampleRate = 44100;
+
 
     /// <summary>支持的文件扩展名 / Supported file extensions.</summary>
     public static readonly string[] SupportedExtensions = [".wav", ".ogg", ".mp3", ".aif", ".aiff", ".aifc"];
@@ -93,7 +124,7 @@ public static partial class AudioDecoder
             }
         }
 
-        DecodedAudio? decoded = DecodeUncached(path, fileExtension: Path.GetExtension(path));
+        DecodedAudio? decoded = DecodeFile(path);
         if (decoded is null)
         {
             return null;
@@ -140,18 +171,24 @@ public static partial class AudioDecoder
         return decoded;
     }
 
-    private static DecodedAudio? DecodeUncached(string path, string fileExtension)
+    private static DecodedAudio? DecodeFile(string path)
     {
         try
         {
-            if (fileExtension.Equals(".mp3", StringComparison.OrdinalIgnoreCase))
+            if (Path.GetExtension(path).Equals(".mp3", StringComparison.OrdinalIgnoreCase))
                 return DecodeMp3(File.OpenRead(path));
-            byte[] bytes = File.ReadAllBytes(path);
-            return DecodeUncached(bytes, fileExtension);
+
+            var audio = OpenStream(path);
+            return audio is null ? null : new()
+            {
+                Channels = audio.Channels,
+                SampleRate = audio.SampleRate,
+                Pcm = audio.ReadPcm(),
+            };
         }
-        catch (Exception ex)
+        catch (Exception error)
         {
-            Console.Error.WriteLine($"[Audio] 解码失败 {path}: {ex.Message}");
+            Console.Error.WriteLine($"[Audio] {path}: {error.Message}");
             return null;
         }
     }
@@ -176,91 +213,13 @@ public static partial class AudioDecoder
         }
     }
 
-    /// <summary>用 NVorbis 解码 OGG Vorbis / Decode OGG Vorbis with NVorbis.</summary>
-    private static unsafe DecodedAudio DecodeOgg(byte[] bytes)
+    private static DecodedAudio DecodeOgg(byte[] bytes)
     {
-        using MemoryStream stream = new(bytes, writable: false);
-        using VorbisReader reader = new(stream, closeOnDispose: false);
-
-        int channels = reader.Channels;
-        int sampleRate = reader.SampleRate;
-
-        // 预估容量后一次性分配，解出的浮点直接写进最终 16 位缓冲，省掉中间数组
-        // Size the buffer up front and write the decoded floats straight into the final 16-bit
-        // buffer, so no intermediate array is needed
-        long estimatedFrames = (long)(reader.TotalTime.TotalSeconds * sampleRate);
-        int initialSamples = estimatedFrames is > 0 and < int.MaxValue / 8
-            ? (int)estimatedFrames * channels
-            : sampleRate * 60 * channels;
-
-        byte[] pcm = new byte[initialSamples * sizeof(short)];
-        float[] buffer = new float[sampleRate * channels];
-        int samplesWritten = 0;
-
-        int read;
-        while ((read = reader.ReadSamples(buffer, 0, buffer.Length)) > 0)
-        {
-            if ((long)(samplesWritten + read) * sizeof(short) > pcm.Length)
-            {
-                // 预估偏小（VBR 常见），按需翻倍
-                // The estimate was low (common with VBR), so grow geometrically as needed
-                long needed = (long)(samplesWritten + read) * sizeof(short);
-                long capacity = pcm.Length;
-                while (capacity < needed)
-                {
-                    capacity *= 2;
-                }
-
-                Array.Resize(ref pcm, (int)Math.Min(capacity, int.MaxValue / 2L));
-            }
-
-            // 每批只 pin 一次，而不是逐样本走 Span / Pin once per batch instead of per sample
-            fixed (byte* destination = pcm)
-            {
-                short* output = (short*)destination + samplesWritten;
-                for (int i = 0; i < read; i++)
-                {
-                    float value = buffer[i];
-                    if (value > 1f)
-                    {
-                        value = 1f;
-                    }
-                    else if (value < -1f)
-                    {
-                        value = -1f;
-                    }
-
-                    output[i] = (short)MathF.Round(value * short.MaxValue);
-                }
-            }
-
-            samplesWritten += read;
-        }
-
-        if (samplesWritten == 0)
-        {
-            return new DecodedAudio
-            {
-                Pcm = [],
-                Channels = channels,
-                SampleRate = sampleRate,
-            };
-        }
-
-        int usedBytes = samplesWritten * sizeof(short);
-        if (usedBytes < pcm.Length)
-        {
-            Array.Resize(ref pcm, usedBytes);
-        }
-
-        // 不重采样：OpenAL 按源采样率播放即可，省掉一次整轨逐样本遍历
-        // No resampling: OpenAL plays at the source rate, saving a per-sample pass over the whole track
-        return new DecodedAudio
-        {
-            Pcm = pcm,
-            Channels = channels,
-            SampleRate = sampleRate,
-        };
+        using var stream = new MemoryStream(bytes, writable: false);
+        using var vorbis = new VorbisReader(stream, closeOnDispose: false);
+        long frames = vorbis.TotalSamples;
+        using var reader = new VorbisFrames(vorbis, frames);
+        return ReadAll(reader, vorbis.Channels, vorbis.SampleRate, frames);
     }
 
     private const ushort WavePcm = 1;
@@ -269,151 +228,73 @@ public static partial class AudioDecoder
     private static readonly Guid WavePcmSubtype = new("00000001-0000-0010-8000-00aa00389b71");
     private static readonly Guid WaveFloatSubtype = new("00000003-0000-0010-8000-00aa00389b71");
 
-    /// <summary>解析整数 PCM 或 32 位浮点 WAV / Parse integer PCM or 32-bit float WAV.</summary>
     private static DecodedAudio? DecodeWav(byte[] bytes)
     {
-        using MemoryStream stream = new(bytes, writable: false);
-        using BinaryReader reader = new(stream);
+        using var stream = new MemoryStream(bytes, writable: false);
+        if (ReadWaveLayout(stream) is not { } layout) return null;
+        using var reader = new PcmFrames(stream, layout);
+        return ReadAll(reader, layout.Channels, layout.Rate, layout.Frames);
+    }
 
-        if (stream.Length < 44 || new string(reader.ReadChars(4)) != "RIFF")
-        {
-            return null;
-        }
+    private static PcmLayout? ReadWaveLayout(Stream stream)
+    {
+        using var reader = new BinaryReader(stream, System.Text.Encoding.ASCII, leaveOpen: true);
+        if (stream.Length < 44 || reader.ReadUInt32() != 0x46464952) return null; // RIFF
+        reader.ReadUInt32();
+        if (reader.ReadUInt32() != 0x45564157) return null; // WAVE
 
-        reader.ReadInt32(); // riff size
-
-        if (new string(reader.ReadChars(4)) != "WAVE")
-        {
-            return null;
-        }
-
-        int channels = 0;
-        int sampleRate = 0;
-        int blockAlign = 0;
-        int bitsPerSample = 0;
-        ushort formatTag = 0;
-        ReadOnlySpan<byte> raw = default;
-
+        int channels = 0, rate = 0, align = 0, bits = 0;
+        ushort format = 0;
+        long offset = 0, length = 0;
         while (stream.Position + 8 <= stream.Length)
         {
-            string chunkId = new(reader.ReadChars(4));
-            int chunkSize = reader.ReadInt32();
-
-            if (chunkSize < 0 || stream.Position + chunkSize > stream.Length)
+            uint chunk = reader.ReadUInt32();
+            uint size = reader.ReadUInt32();
+            long start = stream.Position;
+            if (size > stream.Length - start) break;
+            if (chunk == 0x20746D66) // fmt
             {
-                break;
-            }
-
-            long chunkStart = stream.Position;
-            if (chunkId == "fmt ")
-            {
-                if (chunkSize < 16)
-                    return null;
-
-                formatTag = reader.ReadUInt16();
+                if (size < 16) return null;
+                format = reader.ReadUInt16();
                 channels = reader.ReadUInt16();
-                sampleRate = reader.ReadInt32();
-                reader.ReadInt32(); // byte rate
-                blockAlign = reader.ReadUInt16();
-                bitsPerSample = reader.ReadUInt16();
-                if (formatTag == WaveExtensible)
+                rate = reader.ReadInt32();
+                reader.ReadUInt32();
+                align = reader.ReadUInt16();
+                bits = reader.ReadUInt16();
+                if (format == WaveExtensible)
                 {
-                    if (chunkSize < 40)
-                        return null;
-                    int extensionSize = reader.ReadUInt16();
-                    if (extensionSize < 22 || extensionSize > chunkSize - 18)
-                        return null;
-
-                    Guid subtype = new(bytes.AsSpan((int)chunkStart + 24, 16));
-                    formatTag = subtype == WavePcmSubtype ? WavePcm :
+                    if (size < 40) return null;
+                    int extension = reader.ReadUInt16();
+                    if (extension < 22 || extension > size - 18) return null;
+                    stream.Position = start + 24;
+                    var subtype = new Guid(reader.ReadBytes(16));
+                    format = subtype == WavePcmSubtype ? WavePcm :
                         subtype == WaveFloatSubtype ? WaveIeeeFloat : WaveExtensible;
                 }
-                if (formatTag is not (WavePcm or WaveIeeeFloat))
-                {
-                    Console.Error.WriteLine($"[Audio] 不支持的 WAV 编码 {formatTag}");
-                    return null;
-                }
+                if (format is not (WavePcm or WaveIeeeFloat)) return null;
             }
-            else if (chunkId == "data")
+            else if (chunk == 0x61746164) // data
             {
-                raw = bytes.AsSpan((int)chunkStart, chunkSize);
+                offset = start;
+                length = size;
             }
-
-            stream.Position = chunkStart + chunkSize + (chunkSize & 1);
+            stream.Position = start + size + (size & 1);
         }
 
-        if (raw.IsEmpty || formatTag == 0 || channels == 0 || sampleRate <= 0)
-        {
+        int width = bits / 8;
+        if (channels <= 0 || rate <= 0 || length == 0 || align != channels * width || align == 0 ||
+            length % align != 0)
             return null;
-        }
-
-        // 统一转成 16 位 / Normalize to 16-bit
-        byte[] pcm16;
-        if (formatTag == WaveIeeeFloat)
+        var encoding = format switch
         {
-            if (bitsPerSample != 32 || channels > 2 || blockAlign != channels * sizeof(float) ||
-                raw.Length % blockAlign != 0)
-                return null;
-
-            int sampleCount = raw.Length / sizeof(float);
-            pcm16 = new byte[sampleCount * sizeof(short)];
-            for (int i = 0; i < sampleCount; i++)
-            {
-                float sample = BinaryPrimitives.ReadSingleLittleEndian(raw[(i * sizeof(float))..]);
-                BinaryPrimitives.WriteInt16LittleEndian(pcm16.AsSpan(i * sizeof(short)), FloatToPcm16(sample));
-            }
-        }
-        else if (bitsPerSample == 16)
-        {
-            pcm16 = raw.ToArray();
-        }
-        else if (bitsPerSample == 8)
-        {
-            // 8 位 WAV 是无符号，需居中到 0 / 8-bit WAV is unsigned and needs recentering
-            pcm16 = new byte[raw.Length * 2];
-            for (int i = 0; i < raw.Length; i++)
-            {
-                short value = (short)((raw[i] - 128) << 8);
-                BinaryPrimitives.WriteInt16LittleEndian(pcm16.AsSpan(i * 2), value);
-            }
-        }
-        else if (bitsPerSample == 24)
-        {
-            int sampleCount = raw.Length / 3;
-            pcm16 = new byte[sampleCount * 2];
-            for (int i = 0; i < sampleCount; i++)
-            {
-                // 取高 16 位 / Keep the high 16 bits
-                short value = (short)(raw[i * 3 + 1] | (raw[i * 3 + 2] << 8));
-                BinaryPrimitives.WriteInt16LittleEndian(pcm16.AsSpan(i * 2), value);
-            }
-        }
-        else if (bitsPerSample == 32)
-        {
-            int sampleCount = raw.Length / 4;
-            pcm16 = new byte[sampleCount * 2];
-            for (int i = 0; i < sampleCount; i++)
-            {
-                int value = BinaryPrimitives.ReadInt32LittleEndian(raw[(i * 4)..]);
-                BinaryPrimitives.WriteInt16LittleEndian(pcm16.AsSpan(i * 2), (short)(value >> 16));
-            }
-        }
-        else
-        {
-            Console.Error.WriteLine($"[Audio] 不支持的 WAV 位深 {bitsPerSample}");
-            return null;
-        }
-
-        // 统一重采样到目标采样率 / Resample to the target rate
-        // 不需要重采样，播放端按源采样率直接播放 / No resampling; the player uses the source rate
-
-        return new DecodedAudio
-        {
-            Pcm = pcm16,
-            Channels = channels,
-            SampleRate = sampleRate,
+            WaveIeeeFloat when bits == 32 && channels <= 2 => PcmEncoding.FloatLittle,
+            WavePcm when bits == 8 => PcmEncoding.Unsigned8,
+            WavePcm when bits is 16 or 24 or 32 => PcmEncoding.IntegerLittle,
+            _ => (PcmEncoding?)null,
         };
+        return encoding is { } value ? new(offset, length / align, channels, rate, width, value) : null;
     }
+
 
     private static short FloatToPcm16(double value) => double.IsNaN(value) ? (short)0 : (short)Math.Clamp(
         Math.Round(Math.Clamp(value, -1d, 1d) * 32768d), short.MinValue, short.MaxValue);
